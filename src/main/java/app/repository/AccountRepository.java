@@ -1,18 +1,18 @@
 package app.repository;
 
+import org.jongo.Jongo;
 import org.jongo.MongoCollection;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
-import javax.annotation.PostConstruct;
-
 @Repository
-public class AccountRepository extends AbstractRepository {
+public class AccountRepository {
 
     private MongoCollection accounts;
 
-    @PostConstruct
-    private void init() {
-        accounts = getJongo().getCollection("accounts");
+    @Autowired
+    public AccountRepository(Jongo jongo) {
+        this.accounts = jongo.getCollection("accounts");
     }
 
     public void insert(String id, int balance, Object[] pendingTransactions) {

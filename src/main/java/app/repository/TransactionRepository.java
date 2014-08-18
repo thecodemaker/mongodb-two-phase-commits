@@ -2,19 +2,19 @@ package app.repository;
 
 import app.domain.Transaction;
 import app.domain.TransactionState;
+import org.jongo.Jongo;
 import org.jongo.MongoCollection;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
-import javax.annotation.PostConstruct;
-
 @Repository
-public class TransactionRepository extends AbstractRepository{
+public class TransactionRepository {
 
     private MongoCollection transactions;
 
-    @PostConstruct
-    private void init() {
-        transactions = getJongo().getCollection("transactions");
+    @Autowired
+    public TransactionRepository(Jongo jongo) {
+        this.transactions = jongo.getCollection("transactions");
     }
 
     public void insert(String transactionId, String source, String destination, int value, TransactionState state) {
