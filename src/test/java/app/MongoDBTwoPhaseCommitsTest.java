@@ -1,5 +1,8 @@
 package app;
 
+import app.domain.Account;
+import app.domain.Transaction;
+import app.domain.TransactionState;
 import com.mongodb.DB;
 import com.mongodb.Mongo;
 import com.mongodb.MongoClient;
@@ -27,11 +30,9 @@ public class MongoDBTwoPhaseCommitsTest {
 
     private Jongo jongo;
     private MongoCollection accounts;
+    private MongoCollection transactions;
 
     public static final int MONGODB_PORT = 17017;
-    public static final String MONGODB_HOST = "localhost";
-    public static final String DB_NAME = "database";
-    public static final String COL_NAME = "accounts";
 
     @Before
     public void setUp() throws Exception {
@@ -40,11 +41,12 @@ public class MongoDBTwoPhaseCommitsTest {
         mongodExe = runtime.prepare(new MongodConfig(Version.V2_2_0_RC0, MONGODB_PORT, Network.localhostIsIPv6()));
         mongod = mongodExe.start();
 
-        mongo = new MongoClient(MONGODB_HOST, MONGODB_PORT);
+        mongo = new MongoClient("localhost", MONGODB_PORT);
 
-        db = mongo.getDB(DB_NAME);
+        db = mongo.getDB("database");
         jongo = new Jongo(db);
-        accounts = jongo.getCollection(COL_NAME);
+        accounts = jongo.getCollection("accounts");
+        transactions = jongo.getCollection("transactions");
     }
 
     @After
@@ -58,13 +60,83 @@ public class MongoDBTwoPhaseCommitsTest {
     @Test
     public void testBasicSetup() throws Exception {
 
-        Account account = new Account("A", 1000, new Object[0]);
-        accounts.save(account);
+        accounts.insert(
+                "{_id: \"A\", balance: 1000, pendingTransactions: []}"
+        );
 
         Account retrievedAccount = accounts.findOne().as(Account.class);
 
-        assertThat(account.getBalance(), is(retrievedAccount.getBalance()));
-        assertThat(account.getPendingTransactions(), is(retrievedAccount.getPendingTransactions()));
+        assertThat(retrievedAccount.getBalance(), is(1000));
+        assertThat(retrievedAccount.getPendingTransactions(), is(new Object[0]));
     }
 
+    @Test
+    public void testTwoPhaseCommit() throws Exception {
+
+        accounts.insert(
+            "[" +
+            "     { _id: \"A\", balance: 1000, pendingTransactions: [] },\n" +
+            "     { _id: \"B\", balance: 1000, pendingTransactions: [] }\n" +
+            "]"
+        );
+
+        transactions.insert(
+            "{ _id: \"1\", source: \"A\", destination: \"B\", value: 100, state: #, lastModified: #}", TransactionState.INITIAL, System.currentTimeMillis()
+        );
+
+        Transaction transaction = transactions.findOne().as(Transaction.class);
+
+        transactions.update(
+             "{ _id: #, state: #}", transaction.getId(), TransactionState.INITIAL
+        ).with(
+             "{$set: { state: #, lastModified: #}}", TransactionState.PENDING, System.currentTimeMillis()
+        );
+
+        accounts.update(
+             "{ _id: #, pendingTransactions: { $ne: #}},", transaction.getSource(), transaction.getId()
+        ).with(
+                "{ $inc: { balance: #}, $push: { pendingTransactions: #}}", -transaction.getValue(), transaction.getId()
+        );
+
+        accounts.update(
+             "{ _id: #, pendingTransactions: { $ne: #}},", transaction.getDestination(), transaction.getId()
+        ).with(
+             "{ $inc: { balance: #}, $push: { pendingTransactions: #}}", transaction.getValue(), transaction.getId()
+        );
+
+        transactions.update(
+                "{ _id: #, state: #}", transaction.getId(), TransactionState.PENDING
+        ).with(
+                "{$set: { state: #, lastModified: #}}", TransactionState.APPLIED, System.currentTimeMillis()
+        );
+
+        accounts.update(
+                "{ _id: #, pendingTransactions: #},", transaction.getSource(), transaction.getId()
+        ).with(
+                "{ $pull: { pendingTransactions: #}}",transaction.getId()
+        );
+
+        accounts.update(
+                "{ _id: #, pendingTransactions: #},", transaction.getDestination(), transaction.getId()
+        ).with(
+                "{ $pull: { pendingTransactions: #}}",transaction.getId()
+        );
+
+        transactions.update(
+                "{ _id: #, state: #}", transaction.getId(), TransactionState.APPLIED
+        ).with(
+                "{$set: { state: #, lastModified: #}}", TransactionState.DONE, System.currentTimeMillis()
+        );
+
+        Account accountA = accounts.findOne("{_id: \"A\"}").as(Account.class);
+        assertThat(accountA.getBalance(), is(900));
+        assertThat(accountA.getPendingTransactions(), is(new Object[0]));
+
+        Account accountB = accounts.findOne("{_id: \"B\"}").as(Account.class);
+        assertThat(accountB.getBalance(), is(1100));
+        assertThat(accountB.getPendingTransactions(), is(new Object[0]));
+
+        Transaction finalTransaction = transactions.findOne().as(Transaction.class);
+        assertThat(finalTransaction.getState(), is(TransactionState.DONE));
+    }
 }
