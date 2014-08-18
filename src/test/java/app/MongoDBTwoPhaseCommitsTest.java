@@ -20,6 +20,7 @@ import org.junit.Test;
 
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.emptyArray;
 
 public class MongoDBTwoPhaseCommitsTest {
 
@@ -84,14 +85,17 @@ public class MongoDBTwoPhaseCommitsTest {
             "{ _id: \"1\", source: \"A\", destination: \"B\", value: 100, state: #, lastModified: #}", TransactionState.INITIAL, System.currentTimeMillis()
         );
 
+        //Retrieve the transaction to start.
         Transaction transaction = transactions.findOne().as(Transaction.class);
 
+        //Update transaction state to pending.
         transactions.update(
              "{ _id: #, state: #}", transaction.getId(), TransactionState.INITIAL
         ).with(
              "{$set: { state: #, lastModified: #}}", TransactionState.PENDING, System.currentTimeMillis()
         );
 
+        //Apply the transaction to both accounts.
         accounts.update(
              "{ _id: #, pendingTransactions: { $ne: #}},", transaction.getSource(), transaction.getId()
         ).with(
@@ -104,12 +108,14 @@ public class MongoDBTwoPhaseCommitsTest {
              "{ $inc: { balance: #}, $push: { pendingTransactions: #}}", transaction.getValue(), transaction.getId()
         );
 
+        //Update transaction state to applied.
         transactions.update(
                 "{ _id: #, state: #}", transaction.getId(), TransactionState.PENDING
         ).with(
                 "{$set: { state: #, lastModified: #}}", TransactionState.APPLIED, System.currentTimeMillis()
         );
 
+        //Update both accounts’ list of pending transactions.
         accounts.update(
                 "{ _id: #, pendingTransactions: #},", transaction.getSource(), transaction.getId()
         ).with(
@@ -122,6 +128,7 @@ public class MongoDBTwoPhaseCommitsTest {
                 "{ $pull: { pendingTransactions: #}}",transaction.getId()
         );
 
+        //Update transaction state to done.
         transactions.update(
                 "{ _id: #, state: #}", transaction.getId(), TransactionState.APPLIED
         ).with(
@@ -130,11 +137,11 @@ public class MongoDBTwoPhaseCommitsTest {
 
         Account accountA = accounts.findOne("{_id: \"A\"}").as(Account.class);
         assertThat(accountA.getBalance(), is(900));
-        assertThat(accountA.getPendingTransactions(), is(new Object[0]));
+        assertThat(accountA.getPendingTransactions(), is(emptyArray()));
 
         Account accountB = accounts.findOne("{_id: \"B\"}").as(Account.class);
         assertThat(accountB.getBalance(), is(1100));
-        assertThat(accountB.getPendingTransactions(), is(new Object[0]));
+        assertThat(accountB.getPendingTransactions(), is(emptyArray()));
 
         Transaction finalTransaction = transactions.findOne().as(Transaction.class);
         assertThat(finalTransaction.getState(), is(TransactionState.DONE));

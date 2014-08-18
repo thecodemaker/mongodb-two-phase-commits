@@ -16,9 +16,28 @@
         <de.flapdoodle.embedmongo.version>1.18</de.flapdoodle.embedmongo.version>
         <hamcrest-all.version>1.3</hamcrest-all.version>
         <jongo.version>1.1</jongo.version>
+        <spring.version>4.0.6.RELEASE</spring.version>
     </properties>
 
     <dependencies>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-beans</artifactId>
+            <version>${spring.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <version>${spring.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-test</artifactId>
+            <version>${spring.version}</version>
+        </dependency>
 
         <dependency>
             <groupId>org.mongodb</groupId>
