@@ -3,6 +3,7 @@ package app.config;
 import com.mongodb.DB;
 import com.mongodb.Mongo;
 import com.mongodb.MongoClient;
+import com.mongodb.WriteConcern;
 import de.flapdoodle.embedmongo.MongoDBRuntime;
 import de.flapdoodle.embedmongo.MongodExecutable;
 import de.flapdoodle.embedmongo.MongodProcess;
@@ -45,6 +46,8 @@ public class MongoDBConfig implements InitializingBean, DisposableBean {
         mongod = mongodExe.start();
 
         mongo = new MongoClient(mongoHost, mongoPort);
+        mongo.setWriteConcern(WriteConcern.ACKNOWLEDGED);
+
         db = mongo.getDB(mongoDatabase);
     }
 

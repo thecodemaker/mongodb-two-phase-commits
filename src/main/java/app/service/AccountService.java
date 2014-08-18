@@ -1,32 +1,28 @@
 package app.service;
 
-import app.exception.ApplicationException;
 import app.repository.AccountRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
 
+@Service
 public class AccountService {
 
     @Autowired
     private AccountRepository repository;
 
     public void insert(String accountId, int balance, Object[] pendingTransactions) {
-        int result = repository.insert(accountId, balance, pendingTransactions);
-        if (result != 1) {
-            throw new ApplicationException("Expected result is 1, returned " + result);
-        }
+        repository.insert(accountId, balance, pendingTransactions);
     }
 
-    public void updateBalanceAndPendingTransactions(String accountId, int amount, String transactionId) {
-        int result = repository.updateBalanceAndPendingTransactions(accountId, amount, transactionId);
-        if (result != 1) {
-            throw new ApplicationException("Expected result is 1, returned " + result);
-        }
+    public void updateBalanceAndPushToPendingTransactions(String accountId, int amount, String transactionId) {
+        repository.updateBalanceAndPushToPendingTransactions(accountId, amount, transactionId);
     }
 
-    public void updatePendingTransactions(String accountId, String transactionId) {
-        int result = repository.updatePendingTransactions(accountId, transactionId);
-        if (result != 1) {
-            throw new ApplicationException("Expected result is 1, returned " + result);
-        }
+    public void updateBalanceAndPullFromPendingTransactions(String accountId, int amount, String transactionId) {
+        repository.updateBalanceAndPullFromPendingTransactions(accountId, amount, transactionId);
+    }
+
+    public void updatePullFromPendingTransactions(String accountId, String transactionId) {
+        repository.updatePullFromPendingTransactions(accountId, transactionId);
     }
 }

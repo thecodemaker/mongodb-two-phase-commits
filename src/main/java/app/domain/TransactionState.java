@@ -4,5 +4,7 @@ public enum TransactionState {
     INITIAL,
     PENDING,
     APPLIED,
-    DONE;
+    DONE,
+    CANCELING,
+    CANCELED
 };

@@ -1,69 +1,63 @@
 package app;
 
+import app.config.ApplicationConfig;
 import app.domain.Account;
 import app.domain.Transaction;
 import app.domain.TransactionState;
-import com.mongodb.DB;
-import com.mongodb.Mongo;
-import com.mongodb.MongoClient;
-import de.flapdoodle.embedmongo.MongoDBRuntime;
-import de.flapdoodle.embedmongo.MongodExecutable;
-import de.flapdoodle.embedmongo.MongodProcess;
-import de.flapdoodle.embedmongo.config.MongodConfig;
-import de.flapdoodle.embedmongo.distribution.Version;
-import de.flapdoodle.embedmongo.runtime.Network;
+import app.service.AccountService;
+import app.service.TransactionService;
+import app.service.TransferService;
 import org.jongo.Jongo;
 import org.jongo.MongoCollection;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.emptyArray;
 
+@RunWith(SpringJUnit4ClassRunner.class)
+@ContextConfiguration(classes={ApplicationConfig.class})
 public class MongoDBTwoPhaseCommitsTest {
 
-    private MongodExecutable mongodExe;
-    private MongodProcess mongod;
-    private Mongo mongo;
-    private DB db;
+    @Autowired
+    private AccountService accountService;
 
+    @Autowired
+    private TransactionService transactionService;
+
+    @Autowired
+    private TransferService transferService;
+
+    @Autowired
     private Jongo jongo;
+
     private MongoCollection accounts;
     private MongoCollection transactions;
 
-    public static final int MONGODB_PORT = 17017;
+    private long HOUR_IN_MILLISECONDS = 60 * 60 * 1000;
 
     @Before
     public void setUp() throws Exception {
-
-        MongoDBRuntime runtime = MongoDBRuntime.getDefaultInstance();
-        mongodExe = runtime.prepare(new MongodConfig(Version.V2_2_0_RC0, MONGODB_PORT, Network.localhostIsIPv6()));
-        mongod = mongodExe.start();
-
-        mongo = new MongoClient("localhost", MONGODB_PORT);
-
-        db = mongo.getDB("database");
-        jongo = new Jongo(db);
         accounts = jongo.getCollection("accounts");
         transactions = jongo.getCollection("transactions");
     }
 
     @After
     public void tearDown() throws Exception {
-        db.dropDatabase();
-        mongo.close();
-        mongod.stop();
-        mongodExe.cleanup();
+        accounts.drop();
+        transactions.drop();
     }
 
     @Test
     public void testBasicSetup() throws Exception {
 
-        accounts.insert(
-                "{_id: \"A\", balance: 1000, pendingTransactions: []}"
-        );
+        accountService.insert("A", 1000, new Object[0]);
 
         Account retrievedAccount = accounts.findOne().as(Account.class);
 
@@ -72,7 +66,7 @@ public class MongoDBTwoPhaseCommitsTest {
     }
 
     @Test
-    public void testTwoPhaseCommit() throws Exception {
+    public void testInitialVersion() throws Exception {
 
         accounts.insert(
             "[" +
@@ -146,4 +140,124 @@ public class MongoDBTwoPhaseCommitsTest {
         Transaction finalTransaction = transactions.findOne().as(Transaction.class);
         assertThat(finalTransaction.getState(), is(TransactionState.DONE));
     }
+
+    @Test
+    public void testRefactoredVersion() throws Exception {
+
+        accounts.insert(
+            "[" +
+            "     { _id: \"A\", balance: 1000, pendingTransactions: [] },\n" +
+            "     { _id: \"B\", balance: 1000, pendingTransactions: [] }\n" +
+            "]"
+        );
+
+        transactions.insert(
+            "{ _id: \"1\", source: \"A\", destination: \"B\", value: 100, state: #, lastModified: #}", TransactionState.INITIAL, System.currentTimeMillis()
+        );
+
+        Transaction transaction = transactions.findOne().as(Transaction.class);
+
+        transferService.transfer(transaction);
+
+        Account accountA = accounts.findOne("{_id: \"A\"}").as(Account.class);
+        assertThat(accountA.getBalance(), is(900));
+        assertThat(accountA.getPendingTransactions(), is(emptyArray()));
+
+        Account accountB = accounts.findOne("{_id: \"B\"}").as(Account.class);
+        assertThat(accountB.getBalance(), is(1100));
+        assertThat(accountB.getPendingTransactions(), is(emptyArray()));
+
+        Transaction finalTransaction = transactions.findOne().as(Transaction.class);
+        assertThat(finalTransaction.getState(), is(TransactionState.DONE));
+    }
+
+    @Test
+    public void testRecoverPendingState() throws Exception {
+        accounts.insert(
+           "[" +
+           "     { _id: \"A\", balance: 900, pendingTransactions: [\"1\"] },\n" +
+           "     { _id: \"B\", balance: 1000, pendingTransactions: [] }\n" +
+           "]"
+        );
+
+        transactions.insert(
+            "{ _id: \"1\", source: \"A\", destination: \"B\", value: 100, state: #, lastModified: #}", TransactionState.PENDING, System.currentTimeMillis() - HOUR_IN_MILLISECONDS
+        );
+
+        Transaction transaction = transactionService.findTransactionByStateAndLastModified(TransactionState.PENDING);
+
+        transferService.recoverPending(transaction);
+
+        Account accountA = accounts.findOne("{_id: \"A\"}").as(Account.class);
+        assertThat(accountA.getBalance(), is(900));
+        assertThat(accountA.getPendingTransactions(), is(emptyArray()));
+
+        Account accountB = accounts.findOne("{_id: \"B\"}").as(Account.class);
+        assertThat(accountB.getBalance(), is(1100));
+        assertThat(accountB.getPendingTransactions(), is(emptyArray()));
+
+        Transaction finalTransaction = transactions.findOne().as(Transaction.class);
+        assertThat(finalTransaction.getState(), is(TransactionState.DONE));
+    }
+
+    @Test
+    public void testRecoverAppliedState() throws Exception {
+        accounts.insert(
+                "[" +
+                "     { _id: \"A\", balance: 900, pendingTransactions: [\"1\"] },\n" +
+                "     { _id: \"B\", balance: 1100, pendingTransactions: [\"1\"] }\n" +
+                "]"
+        );
+
+        transactions.insert(
+                "{ _id: \"1\", source: \"A\", destination: \"B\", value: 100, state: #, lastModified: #}", TransactionState.APPLIED, System.currentTimeMillis() - HOUR_IN_MILLISECONDS
+        );
+
+        Transaction transaction = transactionService.findTransactionByStateAndLastModified(TransactionState.APPLIED);
+
+        transferService.recoverApplied(transaction);
+
+        Account accountA = accounts.findOne("{_id: \"A\"}").as(Account.class);
+        assertThat(accountA.getBalance(), is(900));
+        assertThat(accountA.getPendingTransactions(), is(emptyArray()));
+
+        Account accountB = accounts.findOne("{_id: \"B\"}").as(Account.class);
+        assertThat(accountB.getBalance(), is(1100));
+        assertThat(accountB.getPendingTransactions(), is(emptyArray()));
+
+        Transaction finalTransaction = transactions.findOne().as(Transaction.class);
+        assertThat(finalTransaction.getState(), is(TransactionState.DONE));
+    }
+
+
+    @Test
+    public void testCancelPending() throws Exception {
+
+        accounts.insert(
+            "[" +
+            "     { _id: \"A\", balance: 900, pendingTransactions: [\"1\"] },\n" +
+            "     { _id: \"B\", balance: 1100, pendingTransactions: [\"1\"] }\n" +
+            "]"
+        );
+
+        transactions.insert(
+                "{ _id: \"1\", source: \"A\", destination: \"B\", value: 100, state: #, lastModified: #}", TransactionState.PENDING, System.currentTimeMillis() - HOUR_IN_MILLISECONDS
+        );
+
+        Transaction transaction = transactionService.findTransactionByStateAndLastModified(TransactionState.PENDING);
+
+        transferService.cancelPending(transaction);
+
+        Account accountA = accounts.findOne("{_id: \"A\"}").as(Account.class);
+        assertThat(accountA.getBalance(), is(1000));
+        assertThat(accountA.getPendingTransactions(), is(emptyArray()));
+
+        Account accountB = accounts.findOne("{_id: \"B\"}").as(Account.class);
+        assertThat(accountB.getBalance(), is(1000));
+        assertThat(accountB.getPendingTransactions(), is(emptyArray()));
+
+        Transaction finalTransaction = transactions.findOne().as(Transaction.class);
+        assertThat(finalTransaction.getState(), is(TransactionState.CANCELED));
+    }
+
 }
